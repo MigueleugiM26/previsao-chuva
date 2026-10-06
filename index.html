@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Previsão de Chuva — Recife</title>
+<style>
+  :root {
+    --bg: #0a0a0a;
+    --fg: #e8e8e8;
+    --dim: #666;
+    --green: #4cff91;
+    --yellow: #ffd84c;
+    --red: #ff6b6b;
+    --cursor: #e8e8e8;
+    box-sizing: border-box;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  *, *::before, *::after { box-sizing: inherit; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 15px;
+    line-height: 1.7;
+    min-height: 100%;
+  }
+  body {
+    max-width: 680px;
+    margin: 0 auto;
+    padding: 2rem 1.5rem 3rem;
+  }
+  .prompt { color: var(--dim); }
+  .prompt span { color: var(--green); }
+  .section { margin-top: 1.8rem; }
+  .label { color: var(--dim); font-size: 0.85em; margin-bottom: 0.2rem; }
+  .value { font-size: 1.05em; }
+  .big {
+    font-size: 2.4em;
+    font-weight: bold;
+    letter-spacing: -1px;
+    line-height: 1.1;
+    margin: 0.3rem 0;
+  }
+  .rain { color: var(--yellow); }
+  .no-rain { color: var(--green); }
+  .divider {
+    border: none;
+    border-top: 1px solid #222;
+    margin: 1.8rem 0;
+  }
+  .reasoning {
+    white-space: pre-wrap;
+    color: var(--fg);
+    opacity: 0.85;
+    font-size: 0.95em;
+    line-height: 1.8;
+  }
+  .cursor {
+    display: inline-block;
+    width: 9px; height: 1.1em;
+    background: var(--cursor);
+    vertical-align: text-bottom;
+    animation: blink 1.1s step-end infinite;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+  .error { color: var(--red); }
+  .dim { color: var(--dim); }
+  .predictions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1.5rem;
+    margin-top: 0.5rem;
+  }
+  .prediction-block .label { margin-bottom: 0.2rem; }
+  @media (max-width: 420px) {
+    .predictions { grid-template-columns: 1fr; }
+  }
+  .features {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.3rem 2rem;
+    margin-top: 0.5rem;
+    font-size: 0.92em;
+  }
+  .feat-name { color: var(--dim); }
+  .feat-val { color: var(--fg); }
+  @media (max-width: 420px) {
+    .big { font-size: 1.8em; }
+    .features { grid-template-columns: 1fr; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .cursor { animation: none; }
+  }
+</style>
+</head>
+<body>
+
+<div id="app">
+  <div class="section dim">carregando dados meteorológicos<span class="cursor"></span></div>
+</div>
+
+<script>
+
+/* ─────────────────────────────────────────────────────────────
+   Configuração
+   ───────────────────────────────────────────────────────────── */
+const LAT = -8.09;
+const LON = -34.97;
+const LOCATION = `${LAT}° S, ${Math.abs(LON)}° W — Recife, PE (Cavaleiro)`;
+
+
+const FEATURE_ORDER = [
+  "temp_mean", "temp_max", "temp_min", "radiation",
+  "wind_speed", "wind_gusts", "humidity_mean", "dewpoint",
+  "cloud_cover_mean", "pressure_msl", "cloud_cover_max",
+  "cloud_cover_min", "humidity_max", "humidity_min",
+  "pressure_surface",
+  "humidity_yesterday", "cloud_cover_yesterday", "radiation_yesterday",
+  "pressure_yesterday", "dewpoint_yesterday",
+];
+
+const FEATURE_LABELS = {
+  temp_mean: 'Temperatura média',
+  temp_max: 'Temperatura máx.',
+  temp_min: 'Temperatura mín.',
+  radiation: 'Radiação solar',
+  wind_speed: 'Velocidade do vento',
+  wind_gusts: 'Rajadas de vento',
+  humidity_mean: 'Umidade relativa',
+  dewpoint: 'Ponto de orvalho',
+  cloud_cover_mean: 'Cobertura de nuvens',
+  pressure_msl: 'Pressão ao nível do mar',
+  cloud_cover_max: 'Cobertura de nuvens (máx.)',
+  cloud_cover_min: 'Cobertura de nuvens (mín.)',
+  humidity_max: 'Umidade (máx.)',
+  humidity_min: 'Umidade (mín.)',
+  pressure_surface: 'Pressão superficial',
+};
+
+const FEATURE_UNITS = {
+  temp_mean: '°C', temp_max: '°C', temp_min: '°C',
+  radiation: ' MJ/m²', wind_speed: ' km/h', wind_gusts: ' km/h',
+  humidity_mean: '%', dewpoint: '°C', cloud_cover_mean: '%',
+  pressure_msl: ' hPa', cloud_cover_max: '%', cloud_cover_min: '%',
+  humidity_max: '%', humidity_min: '%', pressure_surface: ' hPa',
+};
+
+/* ─────────────────────────────────────────────────────────────
+   Pegando dados do Open-Meteo
+   ───────────────────────────────────────────────────────────── */
+async function fetchWeather() {
+  const today = new Date();
+  const yesterday = new Date(today);
+  yesterday.setDate(today.getDate() - 1);
+  const fmt = d => d.toISOString().split('T')[0];
+
+  const url = `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}`
+    + `&daily=temperature_2m_mean,temperature_2m_max,temperature_2m_min`
+    + `,precipitation_sum,rain_sum,precipitation_hours`
+    + `,shortwave_radiation_sum,wind_speed_10m_max,wind_gusts_10m_max`
+    + `,relative_humidity_2m_mean,dew_point_2m_mean,cloud_cover_mean`
+    + `,pressure_msl_mean,cloud_cover_max,cloud_cover_min`
+    + `,relative_humidity_2m_max,relative_humidity_2m_min,surface_pressure_mean`
+    + `&start_date=${fmt(yesterday)}&end_date=${fmt(today)}`
+    + `&timezone=America/Sao_Paulo`;
+
+  const res = await fetch(url);
+  const json = await res.json();
+  const d = json.daily;
+
+  const keys = ['time','temp_mean','temp_max','temp_min','precip_sum','rain_sum',
+    'precip_hours','radiation','wind_speed','wind_gusts','humidity_mean','dewpoint',
+    'cloud_cover_mean','pressure_msl','cloud_cover_max','cloud_cover_min',
+    'humidity_max','humidity_min','pressure_surface'];
+
+  const rows = [0,1].map(i => {
+    const row = {};
+    keys.forEach((k,j) => row[k] = d[Object.keys(d)[j]]?.[i]);
+    return row;
+  });
+
+  const lagCols = ['humidity_mean','cloud_cover_mean','radiation','pressure_msl','dewpoint'];
+  lagCols.forEach(col => rows[1][`${col}_yesterday`] = rows[0][col]);
+
+  return rows[1];
+}
+
+function rowToFeatures(row, useLags = true) {
+  const fallbacks = {
+    humidity_yesterday: row.humidity_mean,
+    cloud_cover_yesterday: row.cloud_cover_mean,
+    radiation_yesterday: row.radiation,
+    pressure_yesterday: row.pressure_msl,
+    dewpoint_yesterday: row.dewpoint,
+  };
+  const baseForLag = {
+    humidity_yesterday: "humidity_mean",
+    cloud_cover_yesterday: "cloud_cover_mean",
+    radiation_yesterday: "radiation",
+    pressure_yesterday: "pressure_msl",
+    dewpoint_yesterday: "dewpoint",
+  };
+
+  return FEATURE_ORDER.map(k => {
+    if (!useLags && k.endsWith("_yesterday")) {
+      return Number(row[baseForLag[k]]);
+    }
+    if (k.endsWith("_yesterday")) {
+      const v = row[k];
+      if (v != null && !Number.isNaN(Number(v))) return Number(v);
+      return Number(fallbacks[k]);
+    }
+    return Number(row[k]);
+  });
+}
+
+async function callSpace(row, useLags = true) {
+  const features = rowToFeatures(row, useLags);
+
+  const payload = {};
+  FEATURE_ORDER.forEach((key, i) => { payload[key] = features[i]; });
+
+  const res = await fetch("http://localhost:8000/predict", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ data: payload }),
+  });
+
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    throw new Error(`Prediction failed (${res.status})${txt ? ": " + txt : ""}`);
+  }
+  return await res.json(); // { probability, prediction }
+}
+
+/* ─────────────────────────────────────────────────────────────
+   Helpers
+   ───────────────────────────────────────────────────────────── */
+function formatDate(dateStr) {
+  const d = new Date(dateStr + 'T12:00:00');
+  return d.toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+}
+
+function explainPrediction(row, probability) {
+  const lines = [];
+
+  if (row.humidity_mean >= 80) lines.push(`Umidade elevada (${row.humidity_mean}%) indica grande quantidade de vapor d'água na atmosfera.`);
+  else if (row.humidity_mean >= 65) lines.push(`Umidade moderada (${row.humidity_mean}%) contribui para condições favoráveis à chuva.`);
+  else lines.push(`Umidade baixa (${row.humidity_mean}%) reduz a chance de formação de chuva.`);
+
+  if (row.cloud_cover_mean >= 70) lines.push(`Alta cobertura de nuvens (${row.cloud_cover_mean}%) sugere céu encoberto e condições propícias à precipitação.`);
+  else if (row.cloud_cover_mean >= 40) lines.push(`Cobertura de nuvens moderada (${row.cloud_cover_mean}%) pode favorecer chuvas isoladas.`);
+  else lines.push(`Pouca nebulosidade (${row.cloud_cover_mean}%) aponta para céu aberto.`);
+
+  if (row.radiation <= 12) lines.push(`Radiação solar baixa (${row.radiation} MJ/m²) indica céu encoberto durante o dia.`);
+  else if (row.radiation >= 22) lines.push(`Alta radiação solar (${row.radiation} MJ/m²) indica dia de sol predominante.`);
+
+  if (row.pressure_msl <= 1010) lines.push(`Pressão atmosférica baixa (${row.pressure_msl} hPa) favorece a formação de sistemas de chuva.`);
+  else if (row.pressure_msl >= 1018) lines.push(`Pressão alta (${row.pressure_msl} hPa) tende a inibir a formação de chuva.`);
+
+  if (row.dewpoint >= 22) lines.push(`Ponto de orvalho elevado (${row.dewpoint}°C) confirma alto teor de umidade no ar.`);
+
+  return lines.join(' ');
+}
+
+/* ─────────────────────────────────────────────────────────────
+   Renderização
+   ───────────────────────────────────────────────────────────── */
+async function renderResult(row) {
+ const [todayResult, tomorrowResult] = await Promise.all([
+    callSpace(row, false),
+    callSpace(row, true),
+  ]);
+
+  const todayProb = todayResult.probability;
+  const isTodayRain = todayResult.prediction === 1;
+  const probability = tomorrowResult.probability;
+  const isRain = tomorrowResult.prediction === 1;
+
+  const statusClass = isRain ? 'rain' : 'no-rain';
+  const statusText = isRain ? '🌧  Chuva prevista' : '☀️  Sem chuva prevista';
+
+  const todayClass = isTodayRain ? 'rain' : 'no-rain';
+  const todayStatus = isTodayRain ? '🌧  Chuva prevista' : '☀️  Sem chuva prevista';
+
+  const todayStr = formatDate(row.time);
+
+  const featRows = Object.entries(FEATURE_LABELS)
+    .filter(([k]) => row[k] != null)
+    .map(([k, label]) => `
+      <div class="feat-name">${label}</div>
+      <div class="feat-val">${row[k]}${FEATURE_UNITS[k] || ''}</div>
+    `).join('');
+
+  document.getElementById('app').innerHTML = `
+    <div class="section">
+      <div class="label">localização</div>
+      <div class="value">${LOCATION}</div>
+    </div>
+
+    <div class="section">
+      <div class="label">dados de hoje · ${todayStr}</div>
+      <div class="features">${featRows}</div>
+    </div>
+
+    <hr class="divider">
+
+    <div class="section">
+      <div class="predictions">
+        <div class="prediction-block">
+          <div class="label">hoje</div>
+          <div class="big ${todayClass}">${todayProb}%</div>
+          <div class="value ${todayClass}">${todayStatus}</div>
+        </div>
+        <div class="prediction-block">
+          <div class="label">amanhã</div>
+          <div class="big ${statusClass}">${probability}%</div>
+          <div class="value ${statusClass}">${statusText}</div>
+        </div>
+      </div>
+    </div>
+
+    <hr class="divider">
+
+    <div class="section">
+      <div class="label">análise</div>
+      <div class="reasoning">${explainPrediction(row, probability)}</div>
+    </div>
+
+    <hr class="divider">
+    <div class="dim" style="font-size:0.8em">modelo: Random Forest · dados: Open-Meteo · inferência: Local</div>
+  `;
+}
+
+/* ─────────────────────────────────────────────────────────────
+   Main
+   ───────────────────────────────────────────────────────────── */
+async function main() {
+  try {
+    const row = await fetchWeather();
+    await renderResult(row);
+  } catch (err) {
+    document.getElementById('app').innerHTML = `
+      <div class="section error">erro ao carregar dados: ${err.message}</div>
+    `;
+  }
+}
+
+main();
+</script>
+</body>
+</html>
