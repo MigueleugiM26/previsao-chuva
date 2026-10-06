@@ -7,6 +7,8 @@ A página busca os dados meteorológicos de hoje e de ontem diretamente da API
 do Open-Meteo, envia ao backend local, e exibe a probabilidade de chuva para
 **hoje** e para **amanhã**.
 
+![preview](public/thumb.webp)
+
 ---
 
 ## Requisitos
