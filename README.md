@@ -1,7 +1,6 @@
 # Previsão de Chuva — Recife, PE
 
-Interface web local que mostra a previsão de chuva para Recife (bairro do
-Cavaleiro) usando um modelo Random Forest treinado com dados históricos do
+Interface web local que mostra a previsão de chuva para Recife (bairro Cavaleiro) usando um modelo Random Forest treinado com dados históricos do
 Open-Meteo.
 
 A página busca os dados meteorológicos de hoje e de ontem diretamente da API
